@@ -59,7 +59,7 @@ exe.root_module.addImport("text", text.module("text"));
 just ci
 ```
 
-`nix develop` provides the toolchain. `just` lists the recipes, and `just ci` runs what CI runs: the tests, lint, and the conformance suites. `just regen` fetches the UCD release pinned in `build.zig.zon` and rebuilds `src/tables.zig`; commit the result. `just conformance` fetches the same release and runs the UCD test files against it.
+`nix develop` provides the toolchain. `just` lists the recipes, and `just ci` runs what CI runs: the tests, lint, and the conformance suites. `just regen` fetches the UCD release pinned in `build.zig.zon` and rebuilds `src/tables.zig`; commit the result. `just conformance` fetches the same release and runs the UCD test files against it. `just bench` runs the local benchmarks with testingx; the numbers are not claims.
 
 The generator is `tools/gen.zig`. It reads the UCD directory named by the `ucd` dependency and writes the ranges, properties, and mappings in one file. `just test` runs the generator's own tests with the module's.
 

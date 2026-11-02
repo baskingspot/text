@@ -15,6 +15,11 @@ test:
 conformance:
     zig build test -Dconformance --summary all
 
+[doc("Run the benchmarks (ReleaseFast). Extra args go to the benchmark binary")]
+[group("bench")]
+bench *ARGS:
+    zig build bench -- {{ ARGS }}
+
 [doc("Fetch the pinned UCD and regenerate src/tables.zig. Commit the result")]
 [group("data")]
 regen:
@@ -24,7 +29,7 @@ regen:
 [group("lint")]
 lint:
     ziglint
-    zig fmt --check src tools build.zig build.zig.zon
+    zig fmt --check src tools bench build.zig build.zig.zon
     nix fmt -- --ci
     oxfmt --check README.md AGENTS.md CHANGELOG.md THIRD_PARTY.md .github .oxfmtrc.jsonc
     actionlint
@@ -34,7 +39,7 @@ lint:
 [doc("Format everything lint checks")]
 [group("lint")]
 fmt:
-    zig fmt src tools build.zig build.zig.zon
+    zig fmt src tools bench build.zig build.zig.zon
     nix fmt
     oxfmt README.md AGENTS.md CHANGELOG.md THIRD_PARTY.md .github .oxfmtrc.jsonc
     just --fmt

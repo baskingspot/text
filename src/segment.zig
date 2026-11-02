@@ -25,27 +25,43 @@ pub const InCb = tables.InCb;
 
 /// The Grapheme_Cluster_Break property of `cp`.
 pub fn graphemeBreak(cp: u21) GraphemeBreak {
-    return tagged(GraphemeBreak, &tables.grapheme_ranges, cp, .Other);
+    return graphemeData(cp).class;
 }
 
 /// The Word_Break property of `cp`.
 pub fn wordBreak(cp: u21) WordBreak {
-    return tagged(WordBreak, &tables.word_ranges, cp, .Other);
+    return tables.word_stage.get(cp);
 }
 
 /// The Sentence_Break property of `cp`.
 pub fn sentenceBreak(cp: u21) SentenceBreak {
-    return tagged(SentenceBreak, &tables.sentence_ranges, cp, .Other);
+    return tables.sentence_stage.get(cp);
 }
 
 /// The Indic_Conjunct_Break property of `cp`.
 pub fn indicConjunctBreak(cp: u21) InCb {
-    return tagged(InCb, &tables.incb_ranges, cp, .None);
+    return graphemeData(cp).incb;
 }
 
 /// True when `cp` has the Extended_Pictographic property.
 pub fn isExtendedPictographic(cp: u21) bool {
-    return inRanges(&tables.extended_pictographic, cp);
+    return graphemeData(cp).pictographic;
+}
+
+const GraphemeData = struct {
+    class: GraphemeBreak,
+    pictographic: bool,
+    incb: InCb,
+};
+
+/// The three properties the grapheme rules need, from one table lookup.
+fn graphemeData(cp: u21) GraphemeData {
+    const raw = tables.grapheme_data_stage.get(cp);
+    return .{
+        .class = @fromBackingInt(@intCast(raw & 0xFF)),
+        .pictographic = raw & 0x100 != 0,
+        .incb = @fromBackingInt(@intCast((raw >> 9) & 0x3)),
+    };
 }
 
 /// True when there is a grapheme cluster boundary before `input[index]`.
@@ -55,8 +71,10 @@ pub fn isGraphemeBoundary(input: []const u21, index: usize) bool {
 
     const previous = input[index - 1];
     const next = input[index];
-    const previous_class = graphemeBreak(previous);
-    const next_class = graphemeBreak(next);
+    const previous_data = graphemeData(previous);
+    const next_data = graphemeData(next);
+    const previous_class = previous_data.class;
+    const next_class = next_data.class;
 
     // GB3
     if (previous_class == .CR and next_class == .LF) return false;
@@ -85,11 +103,11 @@ pub fn isGraphemeBoundary(input: []const u21, index: usize) bool {
     // GB9b
     if (previous_class == .Prepend) return false;
     // GB9c
-    if (indicConjunctBreak(next) == .Consonant) {
+    if (next_data.incb == .Consonant) {
         if (isIndicConjunctBoundary(input, index)) return false;
     }
     // GB11
-    if (isExtendedPictographic(next) and isEmojiSequenceBoundary(input, index)) {
+    if (next_data.pictographic and isEmojiSequenceBoundary(input, index)) {
         return false;
     }
     // GB12, GB13
@@ -238,7 +256,8 @@ pub fn isSentenceBoundary(input: []const u21, index: usize) bool {
     return false;
 }
 
-/// Iterates grapheme clusters.
+/// Iterates grapheme clusters. The iterator keeps the boundary state between
+/// code points, so it does not rescan the cluster for every position.
 pub const Graphemes = struct {
     input: []const u21,
     index: usize = 0,
@@ -246,10 +265,98 @@ pub const Graphemes = struct {
     pub fn next(self: *Graphemes) ?[]const u21 {
         if (self.index >= self.input.len) return null;
         const start = self.index;
+        var state = GraphemeState.init(self.input[start]);
         var end = start + 1;
-        while (end < self.input.len and !isGraphemeBoundary(self.input, end)) : (end += 1) {}
+        while (end < self.input.len) : (end += 1) {
+            const data = graphemeData(self.input[end]);
+            if (state.isBreak(data)) break;
+            state.advance(data);
+        }
         self.index = end;
         return self.input[start..end];
+    }
+};
+
+const GraphemeState = struct {
+    previous_class: GraphemeBreak,
+    regional_count: u8,
+    pictographic: bool = false,
+    zwj_after_pictographic: bool = false,
+    linker: bool = false,
+
+    fn init(cp: u21) GraphemeState {
+        const data = graphemeData(cp);
+        return .{
+            .previous_class = data.class,
+            .regional_count = if (data.class == .Regional_Indicator) 1 else 0,
+            .pictographic = data.pictographic,
+            .linker = data.incb == .Linker,
+        };
+    }
+
+    fn isBreak(self: GraphemeState, data: GraphemeData) bool {
+        const next = data.class;
+        if (self.previous_class == .CR and next == .LF) return false;
+        if (isGraphemeControl(self.previous_class) or isGraphemeControl(next)) return true;
+        if (self.previous_class == .L and
+            (next == .L or next == .V or next == .LV or next == .LVT))
+        {
+            return false;
+        }
+        if ((self.previous_class == .LV or self.previous_class == .V) and
+            (next == .V or next == .T))
+        {
+            return false;
+        }
+        if ((self.previous_class == .LVT or self.previous_class == .T) and next == .T) {
+            return false;
+        }
+        if (next == .Extend or next == .ZWJ or next == .SpacingMark) return false;
+        if (self.previous_class == .Prepend) return false;
+        if (data.incb == .Consonant and self.linker) return false;
+        if (data.pictographic and
+            self.previous_class == .ZWJ and self.zwj_after_pictographic)
+        {
+            return false;
+        }
+        if (self.previous_class == .Regional_Indicator and
+            next == .Regional_Indicator and self.regional_count % 2 == 1)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    fn advance(self: *GraphemeState, data: GraphemeData) void {
+        const value = data.class;
+        if (value == .Regional_Indicator) {
+            if (self.previous_class == .Regional_Indicator) {
+                self.regional_count +|= 1;
+            } else {
+                self.regional_count = 1;
+            }
+        } else {
+            self.regional_count = 0;
+        }
+
+        if (data.pictographic) {
+            self.pictographic = true;
+            self.zwj_after_pictographic = false;
+        } else if (value == .Extend and self.pictographic) {
+            self.zwj_after_pictographic = false;
+        } else if (value == .ZWJ and self.pictographic) {
+            self.zwj_after_pictographic = true;
+        } else {
+            self.pictographic = false;
+            self.zwj_after_pictographic = false;
+        }
+
+        self.linker = switch (data.incb) {
+            .Linker => true,
+            .Extend => self.linker,
+            else => false,
+        };
+        self.previous_class = value;
     }
 };
 
@@ -474,44 +581,6 @@ fn nextSentenceSignificant(input: []const u21, from: usize) ?usize {
         return position;
     }
     return null;
-}
-
-fn tagged(
-    comptime T: type,
-    ranges: []const tables.TaggedRange(T),
-    cp: u21,
-    default: T,
-) T {
-    var low: usize = 0;
-    var high: usize = ranges.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        const range = ranges[mid];
-        if (cp < range.start) {
-            high = mid;
-        } else if (cp > range.end) {
-            low = mid + 1;
-        } else {
-            return range.value;
-        }
-    }
-    return default;
-}
-
-fn inRanges(ranges: []const tables.Range, cp: u21) bool {
-    var low: usize = 0;
-    var high: usize = ranges.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        if (cp < ranges[mid].start) {
-            high = mid;
-        } else if (cp > ranges[mid].end) {
-            low = mid + 1;
-        } else {
-            return true;
-        }
-    }
-    return false;
 }
 
 const testing = std.testing;

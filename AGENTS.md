@@ -19,14 +19,17 @@ data until a consumer exists.
 Zig 0.17 only. The flake is the tool contract, from `baskingspot/nix`:
 `nix develop` provides Zig, `ziglint`, and the base tools, and nothing comes
 from the system PATH. The justfile is the command interface: `just test`,
-`just lint`, `just conformance`, `just ci`, and `just regen`. Run `just fmt`
-before you commit.
+`just lint`, `just conformance`, `just bench`, `just ci`, and `just regen`.
+Run `just fmt` before you commit.
 
 Tests run under testingx, the org's test runner, a lazy dependency. Every
 `addTest` carries `.test_runner = .{ .path = dep.path("src/runner.zig"), .mode = .simple }`.
 The UCD conformance tests read their data at runtime from the directory in the
 `build_options.conformance_dir` option. Without `-Dconformance` they skip;
 `just conformance` sets it, and `just ci` runs it.
+
+Benchmarks live in `bench/bench.zig` and run through testingx's `addBench`.
+`just bench` builds the suite as ReleaseFast. Benchmarks are not part of CI.
 
 ## The generated table
 
@@ -46,8 +49,8 @@ files. The release, 18.0.0, is pinned by the URL and archive hash of the
   `extracted/DerivedBidiClass.txt`, `extracted/DerivedBinaryProperties.txt`,
   the three `auxiliary/*BreakProperty.txt` files, and
   `emoji/emoji-data.txt`.
-- The generator emits formatted Zig and is deterministic. Two runs on one
-  release must produce identical bytes.
+- The generator output is deterministic, and `just regen` runs `zig fmt` on
+  `src/tables.zig` afterward. Two runs on one release produce identical bytes.
 - A UCD update is a user-visible change: name the new release in the
   CHANGELOG under `## [Unreleased]`.
 

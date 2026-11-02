@@ -33,20 +33,7 @@ pub const max_code_point: u21 = 0x10FFFF;
 /// The general category of `cp`. A code point with no explicit entry in
 /// `UnicodeData.txt` is `.Cn`.
 pub fn category(cp: u21) Category {
-    var low: usize = 0;
-    var high: usize = tables.category_ranges.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        const range = tables.category_ranges[mid];
-        if (cp < range.start) {
-            high = mid;
-        } else if (cp > range.end) {
-            low = mid + 1;
-        } else {
-            return range.category;
-        }
-    }
-    return .Cn;
+    return tables.category_stage.get(cp);
 }
 
 /// Lu, Ll, Lt, Lm, and Lo.
@@ -134,21 +121,22 @@ pub fn isAssigned(cp: u21) bool {
 /// The script of `cp`, from the Script property. Unassigned code points are
 /// `.Unknown`.
 pub fn script(cp: u21) Script {
-    return tagged(Script, &tables.script_ranges, cp, .Unknown);
+    return tables.script_stage.get(cp);
 }
 
 /// The block of `cp`, from the Block property. Code points between blocks are
 /// `.No_Block`.
 pub fn block(cp: u21) Block {
-    return tagged(Block, &tables.block_ranges, cp, .No_Block);
+    return tables.block_stage.get(cp);
 }
 
-/// The range `block` covers, or null when the block has no entries.
-pub fn blockRange(block_value: Block) ?tables.Range {
+/// A block and the code points it covers.
+pub const BlockRange = tables.BlockRange;
+
+/// The range `block_value` covers, or null when the block has no entries.
+pub fn blockRange(block_value: Block) ?BlockRange {
     for (tables.block_ranges) |range| {
-        if (range.value == block_value) {
-            return .{ .start = range.start, .end = range.end };
-        }
+        if (range.block == block_value) return range;
     }
     return null;
 }
@@ -156,76 +144,76 @@ pub fn blockRange(block_value: Block) ?tables.Range {
 /// The Cased property. Cased letters are those whose case mapping can change,
 /// used by the Final_Sigma rule.
 pub fn isCased(cp: u21) bool {
-    return inRanges(&tables.cased, cp);
+    return tables.cased_stage.get(cp);
 }
 
 /// The Case_Ignorable property: case mapping skips these when it looks for a
 /// neighboring cased letter.
 pub fn isCaseIgnorable(cp: u21) bool {
-    return inRanges(&tables.case_ignorable, cp);
+    return tables.case_ignorable_stage.get(cp);
 }
 
 /// The White_Space property from `PropList.txt`. It covers ASCII space and
 /// tab, the line breaks, the no-break spaces, and the Unicode spaces, and it
 /// excludes U+200B.
 pub fn isWhiteSpace(cp: u21) bool {
-    return inRanges(&tables.white_space, cp);
+    return tables.white_space_stage.get(cp);
 }
 
 /// UAX #31 `ID_Start`. A language that allows `_` or `$` in a name adds that
 /// rule itself, because UAX #31 does not.
 pub fn isIdStart(cp: u21) bool {
-    return inRanges(&tables.id_start, cp);
+    return tables.id_start_stage.get(cp);
 }
 
 /// UAX #31 `ID_Continue`.
 pub fn isIdContinue(cp: u21) bool {
-    return inRanges(&tables.id_continue, cp);
+    return tables.id_continue_stage.get(cp);
 }
 
 /// UAX #31 `XID_Start`, the NFKC-closed form.
 pub fn isXidStart(cp: u21) bool {
-    return inRanges(&tables.xid_start, cp);
+    return tables.xid_start_stage.get(cp);
 }
 
 /// UAX #31 `XID_Continue`, the NFKC-closed form.
 pub fn isXidContinue(cp: u21) bool {
-    return inRanges(&tables.xid_continue, cp);
+    return tables.xid_continue_stage.get(cp);
 }
 
 /// The simple uppercase mapping from `UnicodeData.txt`, or `cp` when there is
 /// none. `toUpperFull` is the mapping that can expand.
 pub fn toUpper(cp: u21) u21 {
-    return mapped(&tables.upper, cp);
+    return tables.upper_stage.get(cp);
 }
 
 /// The simple lowercase mapping, or `cp` when there is none.
 pub fn toLower(cp: u21) u21 {
-    return mapped(&tables.lower, cp);
+    return tables.lower_stage.get(cp);
 }
 
 /// The simple titlecase mapping, or `cp` when there is none.
 pub fn toTitle(cp: u21) u21 {
-    return mapped(&tables.title, cp);
+    return tables.title_stage.get(cp);
 }
 
 /// The full uppercase mapping, which can expand to three code points. The
 /// result points into `buf`.
 pub fn toUpperFull(cp: u21, buf: *[3]u21) []const u21 {
-    return fullMapping(&tables.full_upper, &tables.upper, cp, buf);
+    return fullMapping(&tables.full_upper, tables.upper_stage, cp, buf);
 }
 
 /// The full lowercase mapping, which can expand to three code points. The
 /// result points into `buf`. The Final_Sigma rule depends on context; `lower`
 /// applies it.
 pub fn toLowerFull(cp: u21, buf: *[3]u21) []const u21 {
-    return fullMapping(&tables.full_lower, &tables.lower, cp, buf);
+    return fullMapping(&tables.full_lower, tables.lower_stage, cp, buf);
 }
 
 /// The full titlecase mapping, which can expand to three code points. The
 /// result points into `buf`.
 pub fn toTitleFull(cp: u21, buf: *[3]u21) []const u21 {
-    return fullMapping(&tables.full_title, &tables.title, cp, buf);
+    return fullMapping(&tables.full_title, tables.title_stage, cp, buf);
 }
 
 /// The full uppercase mapping of a string. The caller frees the result.
@@ -273,14 +261,14 @@ pub fn foldFull(cp: u21, buf: *[3]u21) []const u21 {
         @memcpy(buf[0..mapping.len], mapping.to[0..mapping.len]);
         return buf[0..mapping.len];
     }
-    buf[0] = mapped(&tables.fold_simple, cp);
+    buf[0] = tables.fold_simple_stage.get(cp);
     return buf[0..1];
 }
 
 /// The simple case folding of one code point, or `cp` when there is none.
 /// Simple folding does not expand; `ß > ss` needs `foldFull`.
 pub fn foldSimple(cp: u21) u21 {
-    return mapped(&tables.fold_simple, cp);
+    return tables.fold_simple_stage.get(cp);
 }
 
 /// The full case folding of a string. The caller frees the result.
@@ -295,7 +283,7 @@ pub fn fold(allocator: std.mem.Allocator, input: []const u21) ![]u21 {
 
 fn fullMapping(
     special: []const tables.MultiMapping,
-    simple: []const tables.Mapping,
+    simple: tables.MappingStage(u21),
     cp: u21,
     buf: *[3]u21,
 ) []const u21 {
@@ -303,7 +291,7 @@ fn fullMapping(
         @memcpy(buf[0..mapping.len], mapping.to[0..mapping.len]);
         return buf[0..mapping.len];
     }
-    buf[0] = mapped(simple, cp);
+    buf[0] = simple.get(cp);
     return buf[0..1];
 }
 
@@ -343,56 +331,6 @@ fn isFinalSigma(input: []const u21, index: usize) bool {
         return !isCased(cp);
     }
     return true;
-}
-
-fn tagged(comptime T: type, ranges: []const tables.TaggedRange(T), cp: u21, default: T) T {
-    var low: usize = 0;
-    var high: usize = ranges.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        const range = ranges[mid];
-        if (cp < range.start) {
-            high = mid;
-        } else if (cp > range.end) {
-            low = mid + 1;
-        } else {
-            return range.value;
-        }
-    }
-    return default;
-}
-
-fn inRanges(ranges: []const tables.Range, cp: u21) bool {
-    var low: usize = 0;
-    var high: usize = ranges.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        if (cp < ranges[mid].start) {
-            high = mid;
-        } else if (cp > ranges[mid].end) {
-            low = mid + 1;
-        } else {
-            return true;
-        }
-    }
-    return false;
-}
-
-fn mapped(mappings: []const tables.Mapping, cp: u21) u21 {
-    var low: usize = 0;
-    var high: usize = mappings.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        const mapping = mappings[mid];
-        if (cp < mapping.from) {
-            high = mid;
-        } else if (cp > mapping.from) {
-            low = mid + 1;
-        } else {
-            return mapping.to;
-        }
-    }
-    return cp;
 }
 
 const testing = std.testing;
@@ -475,44 +413,56 @@ test "simple case mappings" {
     try testing.expectEqual(@as(u21, 0x10FFFF), toUpper(0x10FFFF));
 }
 
-test "every table is sorted and its bounds agree" {
-    try expectSortedCategories(&tables.category_ranges);
-    try expectSortedRanges(&tables.white_space);
-    try expectSortedRanges(&tables.id_start);
-    try expectSortedRanges(&tables.id_continue);
-    try expectSortedRanges(&tables.xid_start);
-    try expectSortedRanges(&tables.xid_continue);
-    try expectSortedMappings(&tables.upper);
-    try expectSortedMappings(&tables.lower);
-    try expectSortedMappings(&tables.title);
+test "generated stage tables are well formed" {
+    try expectStage(Category, tables.category_stage);
+    try expectStage(Script, tables.script_stage);
+    try expectStage(Block, tables.block_stage);
+    try expectStage(tables.GraphemeBreak, tables.grapheme_stage);
+    try expectStage(tables.WordBreak, tables.word_stage);
+    try expectStage(tables.SentenceBreak, tables.sentence_stage);
+    try expectStage(tables.InCb, tables.incb_stage);
+    try expectStage(tables.BidiClass, tables.bidi_stage);
+    try expectBoolStage(tables.white_space_stage);
+    try expectBoolStage(tables.bidi_mirrored_stage);
+    try expectBoolStage(tables.id_start_stage);
+    try expectBoolStage(tables.id_continue_stage);
+    try expectBoolStage(tables.xid_start_stage);
+    try expectBoolStage(tables.xid_continue_stage);
+    try expectBoolStage(tables.cased_stage);
+    try expectBoolStage(tables.case_ignorable_stage);
+    try expectBoolStage(tables.extended_pictographic_stage);
+    try expectMappingStage(tables.upper_stage);
+    try expectMappingStage(tables.lower_stage);
+    try expectMappingStage(tables.title_stage);
+    try expectMappingStage(tables.fold_simple_stage);
 }
 
-fn expectSortedCategories(ranges: []const tables.CategoryRange) !void {
-    var previous: u32 = 0;
-    for (ranges, 0..) |range, index| {
-        try testing.expect(range.start <= range.end);
-        if (index > 0) try testing.expect(previous < range.start);
-        try testing.expectEqual(range.category, category(range.start));
-        try testing.expectEqual(range.category, category(range.end));
-        previous = range.end;
+fn expectStage(comptime T: type, stage: tables.Stage(T)) !void {
+    try testing.expectEqual(@as(usize, 0x1100), stage.stage1.len);
+    try testing.expectEqual(@as(usize, 0), stage.stage2.len % 256);
+    for (stage.stage1) |offset| {
+        try testing.expect(offset < stage.stage2.len);
+        try testing.expectEqual(@as(u16, 0), offset % 256);
     }
 }
 
-fn expectSortedRanges(ranges: []const tables.Range) !void {
-    var previous: u32 = 0;
-    for (ranges, 0..) |range, index| {
-        try testing.expect(range.start <= range.end);
-        if (index > 0) try testing.expect(previous < range.start);
-        previous = range.end;
+fn expectBoolStage(stage: tables.BoolStage) !void {
+    try testing.expectEqual(@as(usize, 0x1100), stage.stage1.len);
+    try testing.expectEqual(@as(usize, 0), stage.stage2.len % 256);
+    for (stage.stage1) |offset| {
+        try testing.expect(offset < stage.stage2.len);
+        try testing.expectEqual(@as(u16, 0), offset % 256);
     }
 }
 
-fn expectSortedMappings(mappings: []const tables.Mapping) !void {
-    var previous: u32 = 0;
-    for (mappings, 0..) |mapping, index| {
-        if (index > 0) try testing.expect(previous < mapping.from);
-        previous = mapping.from;
+fn expectMappingStage(stage: tables.MappingStage(u21)) !void {
+    try testing.expectEqual(@as(usize, 0x1100), stage.stage1.len);
+    try testing.expectEqual(@as(usize, 0), stage.stage2.len % 256);
+    for (stage.stage1) |offset| {
+        try testing.expect(offset < stage.stage2.len);
+        try testing.expectEqual(@as(u16, 0), offset % 256);
     }
+    for (stage.stage2) |index| try testing.expect(index <= stage.values.len);
 }
 
 test "scripts" {
@@ -584,31 +534,12 @@ test "case folding" {
     try testing.expectEqualSlices(u21, &.{ 's', 't', 'r', 'a', 's', 's', 'e' }, folded);
 }
 
-test "every generated table is sorted" {
-    try expectSortedTagged(Script, &tables.script_ranges);
-    try expectSortedTagged(Block, &tables.block_ranges);
-    try expectSortedTagged(tables.GraphemeBreak, &tables.grapheme_ranges);
-    try expectSortedTagged(tables.WordBreak, &tables.word_ranges);
-    try expectSortedTagged(tables.SentenceBreak, &tables.sentence_ranges);
-    try expectSortedTagged(tables.InCb, &tables.incb_ranges);
-    try expectSortedTagged(tables.BidiClass, &tables.bidi_ranges);
-    try expectSortedTagged(tables.BidiClass, &tables.bidi_defaults);
-    try expectSortedRanges(&tables.extended_pictographic);
+test "generated sparse tables are sorted" {
     try expectSortedCcc(&tables.ccc);
     try expectSortedDecompositions(&tables.decompositions);
     try expectSortedCompositions(&tables.compositions);
     try expectSortedBrackets(&tables.brackets);
     try expectSortedMirrors(&tables.mirrors);
-}
-
-fn expectSortedTagged(comptime T: type, ranges: []const tables.TaggedRange(T)) !void {
-    var previous: u32 = 0;
-    for (ranges, 0..) |range, index| {
-        try testing.expect(range.start <= range.end);
-        try testing.expect(@backingInt(range.value) < @typeInfo(T).@"enum".field_names.len);
-        if (index > 0) try testing.expect(previous <= range.start);
-        previous = range.start;
-    }
 }
 
 fn expectSortedCcc(ranges: []const tables.CccRange) !void {
@@ -659,7 +590,7 @@ fn expectSortedMirrors(entries: []const tables.Mirror) !void {
 }
 
 test "generated case tables are sorted" {
-    try expectSortedMappings(&tables.fold_simple);
+    try expectMappingStage(tables.fold_simple_stage);
     try expectSortedMulti(&tables.full_upper);
     try expectSortedMulti(&tables.full_lower);
     try expectSortedMulti(&tables.full_title);

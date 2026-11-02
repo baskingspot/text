@@ -1058,42 +1058,11 @@ fn writeOutput(arena: Allocator, out: *std.ArrayList(u8), output: *const Output)
     try e.print("pub const version = \"{s}\";\n\n", .{output.version});
 
     try e.write(
-        \\/// The general categories.
-        \\pub const Category = enum {
-        \\
-    );
-    for (category_names) |name| {
-        try e.print("    {s},\n", .{name});
-    }
-    try e.write(
-        \\};
-        \\
-        \\/// One contiguous run of code points.
-        \\pub const Range = struct {
+        \\/// A block range, for `blockRange`.
+        \\pub const BlockRange = struct {
         \\    start: u21,
         \\    end: u21,
-        \\};
-        \\
-        \\/// A range tagged with a value.
-        \\pub fn TaggedRange(comptime T: type) type {
-        \\    return struct {
-        \\        start: u21,
-        \\        end: u21,
-        \\        value: T,
-        \\    };
-        \\}
-        \\
-        \\/// A range tagged with its general category.
-        \\pub const CategoryRange = struct {
-        \\    start: u21,
-        \\    end: u21,
-        \\    category: Category,
-        \\};
-        \\
-        \\/// One simple case mapping.
-        \\pub const Mapping = struct {
-        \\    from: u21,
-        \\    to: u21,
+        \\    block: Block,
         \\};
         \\
         \\/// One case mapping that can expand to three code points.
@@ -1138,6 +1107,59 @@ fn writeOutput(arena: Allocator, out: *std.ArrayList(u8), output: *const Output)
         \\    to: u21,
         \\};
         \\
+        \\/// A two-stage lookup table. `stage1` maps a high byte to a 256-entry
+        \\/// block in `stage2`; the blocks are deduplicated.
+        \\pub fn Stage(comptime T: type) type {
+        \\    const Int = if (@typeInfo(T).@"enum".field_names.len <= 256) u8 else u16;
+        \\    return struct {
+        \\        stage1: []const u16,
+        \\        stage2: []const Int,
+        \\
+        \\        pub fn get(self: @This(), cp: u21) T {
+        \\            const offset = self.stage1[cp >> 8];
+        \\            return @enumFromInt(self.stage2[@as(usize, offset) + (cp & 0xFF)]);
+        \\        }
+        \\    };
+        \\}
+        \\
+        \\/// A two-stage boolean lookup table.
+        \\pub const BoolStage = struct {
+        \\    stage1: []const u16,
+        \\    stage2: []const u8,
+        \\
+        \\    pub fn get(self: BoolStage, cp: u21) bool {
+        \\        const offset = self.stage1[cp >> 8];
+        \\        return self.stage2[@as(usize, offset) + (cp & 0xFF)] != 0;
+        \\    }
+        \\};
+        \\
+        \\/// A two-stage table of raw u16 values.
+        \\pub const U16Stage = struct {
+        \\    stage1: []const u16,
+        \\    stage2: []const u16,
+        \\
+        \\    pub fn get(self: U16Stage, cp: u21) u16 {
+        \\        const offset = self.stage1[cp >> 8];
+        \\        return self.stage2[@as(usize, offset) + (cp & 0xFF)];
+        \\    }
+        \\};
+        \\
+        \\/// A two-stage lookup table of indices into a sparse mapping list. Index
+        \\/// 0 means the code point maps to itself.
+        \\pub fn MappingStage(comptime T: type) type {
+        \\    return struct {
+        \\        stage1: []const u16,
+        \\        stage2: []const u16,
+        \\        values: []const T,
+        \\
+        \\        pub fn get(self: @This(), cp: u21) T {
+        \\            const offset = self.stage1[cp >> 8];
+        \\            const index = self.stage2[@as(usize, offset) + (cp & 0xFF)];
+        \\            return if (index == 0) @intCast(cp) else self.values[index - 1];
+        \\        }
+        \\    };
+        \\}
+        \\
         \\/// One input file and its SHA-256.
         \\pub const Source = struct {
         \\    name: []const u8,
@@ -1147,41 +1169,52 @@ fn writeOutput(arena: Allocator, out: *std.ArrayList(u8), output: *const Output)
         \\
     );
 
-    try emitCategoryRanges(e, output.categories);
-    try emitRanges(
+    try emitCategoryStage(arena, e, output.categories);
+    try emitBoolStage(
+        arena,
         e,
         "white_space",
-        "Code points with the White_Space property.",
+        "The White_Space property.",
         output.white_space,
     );
-    try emitRanges(
+    try emitBoolStage(
+        arena,
         e,
         "bidi_mirrored",
         "The Bidi_Mirrored property.",
         output.bidi_mirrored,
     );
-    try emitRanges(e, "id_start", "UAX #31 ID_Start.", output.id_start);
-    try emitRanges(e, "id_continue", "UAX #31 ID_Continue.", output.id_continue);
-    try emitRanges(e, "xid_start", "UAX #31 XID_Start.", output.xid_start);
-    try emitRanges(e, "xid_continue", "UAX #31 XID_Continue.", output.xid_continue);
-    try emitRanges(e, "cased", "The Cased property.", output.cased);
-    try emitRanges(e, "case_ignorable", "The Case_Ignorable property.", output.case_ignorable);
-    try emitMappings(
+    try emitBoolStage(arena, e, "id_start", "UAX #31 ID_Start.", output.id_start);
+    try emitBoolStage(arena, e, "id_continue", "UAX #31 ID_Continue.", output.id_continue);
+    try emitBoolStage(arena, e, "xid_start", "UAX #31 XID_Start.", output.xid_start);
+    try emitBoolStage(arena, e, "xid_continue", "UAX #31 XID_Continue.", output.xid_continue);
+    try emitBoolStage(arena, e, "cased", "The Cased property.", output.cased);
+    try emitBoolStage(
+        arena,
+        e,
+        "case_ignorable",
+        "The Case_Ignorable property.",
+        output.case_ignorable,
+    );
+    try emitMappingStage(
+        arena,
         e,
         "upper",
-        "Simple uppercase mappings, ascending by `from`.",
+        "Simple uppercase mappings.",
         output.upper,
     );
-    try emitMappings(
+    try emitMappingStage(
+        arena,
         e,
         "lower",
-        "Simple lowercase mappings, ascending by `from`.",
+        "Simple lowercase mappings.",
         output.lower,
     );
-    try emitMappings(
+    try emitMappingStage(
+        arena,
         e,
         "title",
-        "Simple titlecase mappings, ascending by `from`.",
+        "Simple titlecase mappings.",
         output.title,
     );
     try emitMultiMappings(
@@ -1214,78 +1247,100 @@ fn writeOutput(arena: Allocator, out: *std.ArrayList(u8), output: *const Output)
         "Full case folding, ascending by `from`.",
         output.fold_full,
     );
-    try emitMappings(
+    try emitMappingStage(
+        arena,
         e,
         "fold_simple",
-        "Simple case folding, ascending by `from`.",
+        "Simple case folding.",
         output.fold_simple,
     );
-    try emitNamedRanges(
-        e,
-        "script_ranges",
+    try emitNamedStage(
         "Script",
+        arena,
+        e,
+        "script",
         "The Script property.",
         output.scripts,
         output.script_ranges,
+        "Unknown",
     );
-    try emitNamedRanges(
-        e,
-        "block_ranges",
+    try emitNamedStage(
         "Block",
+        arena,
+        e,
+        "block",
         "The Block property.",
         output.blocks,
         output.block_ranges,
+        "No_Block",
     );
-    try emitCcc(e, output.ccc);
-    try emitDecompositions(e, output.decompositions, output.decomposition_values);
-    try emitCompositions(e, output.compositions);
-    try emitNamedRanges(
-        e,
-        "grapheme_ranges",
+    try emitBlockRanges(arena, e, output.blocks, output.block_ranges);
+    try emitNamedStage(
         "GraphemeBreak",
+        arena,
+        e,
+        "grapheme",
         "UAX #29 Grapheme_Cluster_Break.",
         output.grapheme_breaks,
         output.grapheme_ranges,
+        "Other",
     );
-    try emitNamedRanges(
-        e,
-        "word_ranges",
+    try emitNamedStage(
         "WordBreak",
+        arena,
+        e,
+        "word",
         "UAX #29 Word_Break.",
         output.word_breaks,
         output.word_ranges,
+        "Other",
     );
-    try emitNamedRanges(
-        e,
-        "sentence_ranges",
+    try emitNamedStage(
         "SentenceBreak",
+        arena,
+        e,
+        "sentence",
         "UAX #29 Sentence_Break.",
         output.sentence_breaks,
         output.sentence_ranges,
+        "Other",
     );
-    try emitRanges(
+    try emitBoolStage(
+        arena,
         e,
         "extended_pictographic",
         "The Extended_Pictographic property.",
         output.extended_pictographic,
     );
-    try emitNamedRanges(
-        e,
-        "incb_ranges",
+    try emitNamedStage(
         "InCb",
+        arena,
+        e,
+        "incb",
         "Indic_Conjunct_Break.",
         output.incb,
         output.incb_ranges,
+        "None",
     );
-    try emitNamedRanges(
+    try emitBidiStage(
+        arena,
         e,
-        "bidi_ranges",
-        "BidiClass",
-        "The Bidi_Class property.",
         output.bidi_classes,
         output.bidi_ranges,
+        output.bidi_defaults,
     );
-    try emitBidiDefaults(e, output.bidi_classes, output.bidi_defaults);
+    try emitGraphemeData(
+        arena,
+        e,
+        output.grapheme_breaks,
+        output.grapheme_ranges,
+        output.incb,
+        output.incb_ranges,
+        output.extended_pictographic,
+    );
+    try emitCcc(e, output.ccc);
+    try emitDecompositions(e, output.decompositions, output.decomposition_values);
+    try emitCompositions(e, output.compositions);
     try emitBrackets(e, output.brackets);
     try emitMirrors(e, output.mirrors);
     try emitSources(e, output.sources);
@@ -1293,17 +1348,15 @@ fn writeOutput(arena: Allocator, out: *std.ArrayList(u8), output: *const Output)
     out.* = emitter.bytes;
 }
 
-fn emitCategoryRanges(e: *Emitter, ranges: []const CategoryRange) !void {
-    try e.write(
-        \\/// The category of every code point that is not Cn.
-        \\pub const category_ranges = [_]CategoryRange{
-        \\
-    );
-    for (ranges) |range| {
-        try e.print(
-            "    .{{ .start = 0x{X:0>6}, .end = 0x{X:0>6}, .category = .{s} }},\n",
-            .{ range.start, range.end, category_names[range.category] },
-        );
+fn emitEnum(
+    e: *Emitter,
+    comptime enum_name: []const u8,
+    doc: []const u8,
+    names: []const []const u8,
+) !void {
+    try e.print("/// {s}\npub const {s} = enum {{\n", .{ doc, enum_name });
+    for (names) |value| {
+        try e.print("    {s},\n", .{value});
     }
     try e.write(
         \\};
@@ -1312,13 +1365,95 @@ fn emitCategoryRanges(e: *Emitter, ranges: []const CategoryRange) !void {
     );
 }
 
-fn emitRanges(e: *Emitter, name: []const u8, doc: []const u8, ranges: []const Range) !void {
-    try e.print("/// {s}\npub const {s} = [_]Range{{\n", .{ doc, name });
+fn denseTagged(
+    comptime Int: type,
+    arena: Allocator,
+    ranges: []const TaggedRange,
+    default: Int,
+) ![]Int {
+    const dense = try arena.alloc(Int, 0x110000);
+    @memset(dense, default);
     for (ranges) |range| {
-        try e.print(
-            "    .{{ .start = 0x{X:0>6}, .end = 0x{X:0>6} }},\n",
-            .{ range.start, range.end },
-        );
+        const value: Int = @intCast(range.value);
+        var cp = range.start;
+        while (cp <= range.end) : (cp += 1) dense[cp] = value;
+    }
+    return dense;
+}
+
+fn denseBool(arena: Allocator, ranges: []const Range) ![]u8 {
+    const dense = try arena.alloc(u8, 0x110000);
+    @memset(dense, 0);
+    for (ranges) |range| {
+        var cp = range.start;
+        while (cp <= range.end) : (cp += 1) dense[cp] = 1;
+    }
+    return dense;
+}
+
+const Stages = struct {
+    stage1: []u16,
+    stage2: []u8,
+};
+
+fn stagesU8(arena: Allocator, dense: []const u8) !Stages {
+    var stage1 = try arena.alloc(u16, 0x1100);
+    var stage2: std.ArrayList(u8) = .empty;
+    var seen = std.StringHashMap(u16).init(arena);
+
+    var block: usize = 0;
+    while (block < 0x1100) : (block += 1) {
+        const values = dense[block * 256 ..][0..256];
+        const bytes = std.mem.sliceAsBytes(values);
+        if (seen.get(bytes)) |index| {
+            stage1[block] = index;
+            continue;
+        }
+        const offset: u16 = @intCast(stage2.items.len);
+        stage1[block] = offset;
+        try seen.put(try arena.dupe(u8, bytes), offset);
+        try stage2.appendSlice(arena, values);
+    }
+    return .{ .stage1 = stage1, .stage2 = try stage2.toOwnedSlice(arena) };
+}
+
+fn stagesU16(arena: Allocator, dense: []const u16) !struct { stage1: []u16, stage2: []u16 } {
+    var stage1 = try arena.alloc(u16, 0x1100);
+    var stage2: std.ArrayList(u16) = .empty;
+    var seen = std.StringHashMap(u16).init(arena);
+
+    var block: usize = 0;
+    while (block < 0x1100) : (block += 1) {
+        const values = dense[block * 256 ..][0..256];
+        const bytes = std.mem.sliceAsBytes(values);
+        if (seen.get(bytes)) |index| {
+            stage1[block] = index;
+            continue;
+        }
+        const offset: u16 = @intCast(stage2.items.len);
+        stage1[block] = offset;
+        try seen.put(try arena.dupe(u8, bytes), offset);
+        try stage2.appendSlice(arena, values);
+    }
+    return .{ .stage1 = stage1, .stage2 = try stage2.toOwnedSlice(arena) };
+}
+
+fn emitNumberArray(
+    e: *Emitter,
+    comptime T: type,
+    name: []const u8,
+    values: []const T,
+    comptime hex: bool,
+) !void {
+    try e.print("pub const {s} = [_]{s}{{\n", .{ name, @typeName(T) });
+    for (values, 0..) |value, index| {
+        if (index % 16 == 0) try e.write("    ");
+        if (hex) {
+            try e.print("0x{X:0>6},", .{value});
+        } else {
+            try e.print("{d},", .{value});
+        }
+        if (index % 16 == 15 or index + 1 == values.len) try e.write("\n");
     }
     try e.write(
         \\};
@@ -1327,17 +1462,263 @@ fn emitRanges(e: *Emitter, name: []const u8, doc: []const u8, ranges: []const Ra
     );
 }
 
-fn emitMappings(
+fn emitStageArrays(
+    e: *Emitter,
+    name: []const u8,
+    stage1: []const u16,
+    stage2: []const u8,
+) !void {
+    try emitNumberArray(
+        e,
+        u16,
+        try e.arena.print("{s}_stage1", .{name}),
+        stage1,
+        false,
+    );
+    try emitNumberArray(
+        e,
+        u8,
+        try e.arena.print("{s}_stage2", .{name}),
+        stage2,
+        false,
+    );
+}
+
+fn emitStageArrays16(
+    e: *Emitter,
+    name: []const u8,
+    stage1: []const u16,
+    stage2: []const u16,
+) !void {
+    try emitNumberArray(
+        e,
+        u16,
+        try e.arena.print("{s}_stage1", .{name}),
+        stage1,
+        false,
+    );
+    try emitNumberArray(
+        e,
+        u16,
+        try e.arena.print("{s}_stage2", .{name}),
+        stage2,
+        false,
+    );
+}
+
+fn emitNamedStage(
+    comptime enum_name: []const u8,
+    arena: Allocator,
+    e: *Emitter,
+    name: []const u8,
+    doc: []const u8,
+    names: []const []const u8,
+    ranges: []const TaggedRange,
+    default_name: []const u8,
+) !void {
+    try emitEnum(e, enum_name, doc, names);
+    if (names.len <= 256) {
+        try emitNamedStageInt(u8, enum_name, arena, e, name, doc, names, ranges, default_name);
+    } else {
+        try emitNamedStageInt(u16, enum_name, arena, e, name, doc, names, ranges, default_name);
+    }
+}
+
+fn emitNamedStageInt(
+    comptime Int: type,
+    comptime enum_name: []const u8,
+    arena: Allocator,
+    e: *Emitter,
+    name: []const u8,
+    doc: []const u8,
+    names: []const []const u8,
+    ranges: []const TaggedRange,
+    default_name: []const u8,
+) !void {
+    const default = indexOf(names, default_name) orelse return error.MissingName;
+    const dense = try denseTagged(Int, arena, ranges, @intCast(default));
+    if (Int == u8) {
+        const stages = try stagesU8(arena, dense);
+        try emitStageArrays(e, name, stages.stage1, stages.stage2);
+    } else {
+        const stages = try stagesU16(arena, dense);
+        try emitStageArrays16(e, name, stages.stage1, stages.stage2);
+    }
+    try e.print(
+        "/// The {s} of each code point.\n" ++
+            "pub const {s}_stage: Stage({s}) = .{{ " ++
+            ".stage1 = &{s}_stage1, .stage2 = &{s}_stage2 }};\n\n",
+        .{ doc, name, enum_name, name, name },
+    );
+}
+
+fn emitCategoryStage(arena: Allocator, e: *Emitter, ranges: []const CategoryRange) !void {
+    try emitEnum(e, "Category", "The general categories.", &category_names);
+    const default = categoryIndex("Cn") orelse return error.UnknownCategory;
+    var dense = try arena.alloc(u8, 0x110000);
+    @memset(dense, @intCast(default));
+    for (ranges) |range| {
+        const value: u8 = @intCast(range.category);
+        var cp = range.start;
+        while (cp <= range.end) : (cp += 1) dense[cp] = value;
+    }
+    const stages = try stagesU8(arena, dense);
+    try emitStageArrays(e, "category", stages.stage1, stages.stage2);
+    try e.write(
+        \\/// The general category of each code point.
+        \\pub const category_stage: Stage(Category) = .{
+        \\    .stage1 = &category_stage1,
+        \\    .stage2 = &category_stage2,
+        \\};
+        \\
+        \\
+    );
+}
+
+fn emitBidiStage(
+    arena: Allocator,
+    e: *Emitter,
+    names: []const []const u8,
+    ranges: []const TaggedRange,
+    defaults: []const TaggedRange,
+) !void {
+    try emitEnum(e, "BidiClass", "The Bidi_Class property.", names);
+    const default = indexOf(names, "L") orelse return error.MissingName;
+    var dense = try arena.alloc(u8, 0x110000);
+    @memset(dense, @intCast(default));
+
+    // The first default covers the whole range; the rest override it.
+    for (defaults[1..]) |range| {
+        const value: u8 = @intCast(range.value);
+        var cp = range.start;
+        while (cp <= range.end) : (cp += 1) dense[cp] = value;
+    }
+    for (ranges) |range| {
+        const value: u8 = @intCast(range.value);
+        var cp = range.start;
+        while (cp <= range.end) : (cp += 1) dense[cp] = value;
+    }
+    const stages = try stagesU8(arena, dense);
+    try emitStageArrays(e, "bidi", stages.stage1, stages.stage2);
+    try e.write(
+        \\/// The Bidi_Class of each code point, including the @missing defaults.
+        \\pub const bidi_stage: Stage(BidiClass) = .{
+        \\    .stage1 = &bidi_stage1,
+        \\    .stage2 = &bidi_stage2,
+        \\};
+        \\
+        \\
+    );
+}
+
+fn emitBoolStage(
+    arena: Allocator,
+    e: *Emitter,
+    name: []const u8,
+    doc: []const u8,
+    ranges: []const Range,
+) !void {
+    const dense = try denseBool(arena, ranges);
+    const stages = try stagesU8(arena, dense);
+    try emitStageArrays(e, name, stages.stage1, stages.stage2);
+    try e.print(
+        "/// {s}\n" ++
+            "pub const {s}_stage: BoolStage = .{{ " ++
+            ".stage1 = &{s}_stage1, .stage2 = &{s}_stage2 }};\n\n",
+        .{ doc, name, name, name },
+    );
+}
+
+fn emitMappingStage(
+    arena: Allocator,
     e: *Emitter,
     name: []const u8,
     doc: []const u8,
     mappings: []const Mapping,
 ) !void {
-    try e.print("/// {s}\npub const {s} = [_]Mapping{{\n", .{ doc, name });
-    for (mappings) |mapping| {
+    var dense = try arena.alloc(u16, 0x110000);
+    @memset(dense, 0);
+    const values = try arena.alloc(u21, mappings.len);
+    for (mappings, 0..) |mapping, index| {
+        dense[mapping.from] = @intCast(index + 1);
+        values[index] = mapping.to;
+    }
+    const stages = try stagesU16(arena, dense);
+    try emitStageArrays16(e, name, stages.stage1, stages.stage2);
+    try emitNumberArray(e, u21, try arena.print("{s}_values", .{name}), values, true);
+    try e.print(
+        "/// {s}\n" ++
+            "pub const {s}_stage: MappingStage(u21) = .{{ " ++
+            ".stage1 = &{s}_stage1, .stage2 = &{s}_stage2, " ++
+            ".values = &{s}_values }};\n\n",
+        .{ doc, name, name, name, name },
+    );
+}
+
+fn emitGraphemeData(
+    arena: Allocator,
+    e: *Emitter,
+    grapheme_names: []const []const u8,
+    grapheme_ranges: []const TaggedRange,
+    incb_names: []const []const u8,
+    incb_ranges: []const TaggedRange,
+    extended_pictographic: []const Range,
+) !void {
+    const default_break = indexOf(grapheme_names, "Other") orelse return error.MissingName;
+    const default_incb = indexOf(incb_names, "None") orelse return error.MissingName;
+    var dense = try arena.alloc(u16, 0x110000);
+    @memset(dense, @as(u16, @intCast(default_break)) | (@as(u16, @intCast(default_incb)) << 9));
+
+    for (grapheme_ranges) |range| {
+        const value: u16 = @intCast(range.value);
+        var cp = range.start;
+        while (cp <= range.end) : (cp += 1) {
+            dense[cp] = (dense[cp] & ~@as(u16, 0xFF)) | value;
+        }
+    }
+    for (incb_ranges) |range| {
+        const value: u16 = @intCast(range.value);
+        var cp = range.start;
+        while (cp <= range.end) : (cp += 1) {
+            dense[cp] = (dense[cp] & ~@as(u16, 0x600)) | (value << 9);
+        }
+    }
+    for (extended_pictographic) |range| {
+        var cp = range.start;
+        while (cp <= range.end) : (cp += 1) {
+            dense[cp] |= 0x100;
+        }
+    }
+    const stages = try stagesU16(arena, dense);
+    try emitStageArrays16(e, "grapheme_data", stages.stage1, stages.stage2);
+    try e.write(
+        \\/// Grapheme_Cluster_Break in bits 0-7, Extended_Pictographic in bit 8,
+        \\/// and Indic_Conjunct_Break in bits 9-10.
+        \\pub const grapheme_data_stage: U16Stage = .{
+        \\    .stage1 = &grapheme_data_stage1,
+        \\    .stage2 = &grapheme_data_stage2,
+        \\};
+        \\
+        \\
+    );
+}
+
+fn emitBlockRanges(
+    arena: Allocator,
+    e: *Emitter,
+    names: []const []const u8,
+    ranges: []const TaggedRange,
+) !void {
+    _ = arena;
+    try e.write(
+        \\/// The Block property as ranges, for `blockRange`.
+        \\pub const block_ranges = [_]BlockRange{
+        \\
+    );
+    for (ranges) |range| {
         try e.print(
-            "    .{{ .from = 0x{X:0>6}, .to = 0x{X:0>6} }},\n",
-            .{ mapping.from, mapping.to },
+            "    .{{ .start = 0x{X:0>6}, .end = 0x{X:0>6}, .block = .{s} }},\n",
+            .{ range.start, range.end, names[range.value] },
         );
     }
     try e.write(
@@ -1359,63 +1740,6 @@ fn emitMultiMappings(
             "    .{{ .from = 0x{X:0>6}, .len = {d}, .to = .{{ " ++
                 "0x{X:0>6}, 0x{X:0>6}, 0x{X:0>6} }} }},\n",
             .{ mapping.from, mapping.len, mapping.to[0], mapping.to[1], mapping.to[2] },
-        );
-    }
-    try e.write(
-        \\};
-        \\
-        \\
-    );
-}
-
-fn emitBidiDefaults(
-    e: *Emitter,
-    names: []const []const u8,
-    ranges: []const TaggedRange,
-) !void {
-    try e.write(
-        \\/// Bidi_Class for code points with no explicit entry.
-        \\pub const bidi_defaults = [_]TaggedRange(BidiClass){
-        \\
-    );
-    for (ranges) |range| {
-        try e.print(
-            "    .{{ .start = 0x{X:0>6}, .end = 0x{X:0>6}, .value = .{s} }},\n",
-            .{ range.start, range.end, names[range.value] },
-        );
-    }
-    try e.write(
-        \\};
-        \\
-        \\
-    );
-}
-
-fn emitNamedRanges(
-    e: *Emitter,
-    name: []const u8,
-    comptime enum_name: []const u8,
-    doc: []const u8,
-    names: []const []const u8,
-    ranges: []const TaggedRange,
-) !void {
-    try e.print("/// {s}\npub const {s} = enum {{\n", .{ doc, enum_name });
-    for (names) |value| {
-        try e.print("    {s},\n", .{value});
-    }
-    try e.write(
-        \\};
-        \\
-        \\
-    );
-    try e.print(
-        "/// The values of `{s}`.\npub const {s} = [_]TaggedRange({s}){{\n",
-        .{ enum_name, name, enum_name },
-    );
-    for (ranges) |range| {
-        try e.print(
-            "    .{{ .start = 0x{X:0>6}, .end = 0x{X:0>6}, .value = .{s} }},\n",
-            .{ range.start, range.end, names[range.value] },
         );
     }
     try e.write(

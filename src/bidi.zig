@@ -58,42 +58,13 @@ const Run = struct {
 
 /// The Bidi_Class property of `cp`.
 pub fn class(cp: u21) Class {
-    var low: usize = 0;
-    var high: usize = tables.bidi_ranges.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        const range = tables.bidi_ranges[mid];
-        if (cp < range.start) {
-            high = mid;
-        } else if (cp > range.end) {
-            low = mid + 1;
-        } else {
-            return range.value;
-        }
-    }
-
-    // Unassigned code points take the @missing default for their range. The
-    // first default covers every code point, so skip it and fall back to L.
-    low = 1;
-    high = tables.bidi_defaults.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        const range = tables.bidi_defaults[mid];
-        if (cp < range.start) {
-            high = mid;
-        } else if (cp > range.end) {
-            low = mid + 1;
-        } else {
-            return range.value;
-        }
-    }
-    return .L;
+    return tables.bidi_stage.get(cp);
 }
 
 /// The Bidi_Mirrored property. A renderer mirrors the glyph when this is true
 /// and the resolved direction is right-to-left.
 pub fn isMirrored(cp: u21) bool {
-    return inRanges(&tables.bidi_mirrored, cp);
+    return tables.bidi_mirrored_stage.get(cp);
 }
 
 /// The mirrored glyph for `cp`, when `BidiMirroring.txt` names one.
@@ -808,22 +779,6 @@ fn canonicalBracket(cp: u21) u21 {
         0x232A => 0x3009,
         else => cp,
     };
-}
-
-fn inRanges(ranges: []const tables.Range, cp: u21) bool {
-    var low: usize = 0;
-    var high: usize = ranges.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        if (cp < ranges[mid].start) {
-            high = mid;
-        } else if (cp > ranges[mid].end) {
-            low = mid + 1;
-        } else {
-            return true;
-        }
-    }
-    return false;
 }
 
 const testing = std.testing;

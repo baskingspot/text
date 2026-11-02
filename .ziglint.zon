@@ -9,6 +9,7 @@
         "src/normalize.zig",
         "src/segment.zig",
         "src/bidi.zig",
+        "bench/bench.zig",
         "tools/gen.zig",
     },
     .rules = .{

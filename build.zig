@@ -82,13 +82,30 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(gen_tests).step);
 
+    // Benchmarks. testingx's addBench builds the suite as ReleaseFast. The
+    // dependency is lazy, so a consumer never fetches it.
+    if (b.lazyImport(@This(), "testingx")) |testingx_build| {
+        const bench_dep = b.lazyDependency("testingx", .{ .target = target }).?;
+        const run_bench = testingx_build.addBench(b, .{
+            .name = "bench-text",
+            .module = bench_dep.module("testingx"),
+            .root_source_file = b.path("bench/bench.zig"),
+            .imports = &.{.{ .name = "text", .module = mod }},
+        });
+        run_bench.addPassthruArgs();
+        const bench_step = b.step("bench", "Run benchmarks (ReleaseFast)");
+        bench_step.dependOn(&run_bench.step);
+    }
+
     if (want_regen) {
         const gen = b.addRunArtifact(gen_exe);
         gen.setCwd(b.path("."));
         gen.addArg("--out");
         gen.addArg("src/tables.zig");
         gen.addDirectoryArg(ucd.?.path("."));
+        const format = b.addSystemCommand(&.{ b.graph.zig_exe, "fmt", "src/tables.zig" });
+        format.step.dependOn(&gen.step);
         const regen = b.step("regen", "Regenerate src/tables.zig from the pinned UCD");
-        regen.dependOn(&gen.step);
+        regen.dependOn(&format.step);
     }
 }
