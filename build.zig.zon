@@ -11,14 +11,6 @@
             .hash = "testingx-0.4.0-ib95-2JkAwDVM639ma-akYafT4bdewLfpFaAEnLBzQXG",
             .lazy = true,
         },
-        // The Unicode Character Database, 18.0.0. Lazy and used only by
-        // `zig build regen`, so a consumer never downloads it. Change the
-        // version and the hash together, then run `just regen`.
-        .ucd = .{
-            .url = "https://www.unicode.org/Public/18.0.0/ucd/UCD.zip",
-            .hash = "N-V-__8AANHxWwIt4EQAd6ed2GJB3LAy6HBNZO-fmag0ZqR4",
-            .lazy = true,
-        },
     },
     .paths = .{
         "build.zig",

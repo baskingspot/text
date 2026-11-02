@@ -23,5 +23,6 @@ The `sources` constant in `src/tables.zig` carries the SHA-256 of each input
 file, so the regenerated table names exactly what produced it.
 
 `UnicodeData.txt` and the two derived files are not vendored. `just regen`
-fetches `UCD.zip` at the URL pinned in `build.zig.zon`, verifies its hash, and
-runs the generator. A consumer of the package fetches neither.
+fetches the three files from the URLs pinned in the recipe, verifies each
+SHA-256, and runs the generator. A consumer of the package fetches neither the
+data nor the generator.

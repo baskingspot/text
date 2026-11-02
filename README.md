@@ -51,7 +51,7 @@ exe.root_module.addImport("text", text.module("text"));
 just ci
 ```
 
-`nix develop` provides the toolchain. `just` lists the recipes, and `just ci` runs what CI runs: the tests and lint. `just regen` rebuilds `src/tables.zig` from the UCD release pinned in `build.zig.zon`; the first run downloads the archive and the result is committed.
+`nix develop` provides the toolchain. `just` lists the recipes, and `just ci` runs what CI runs: the tests and lint. `just regen` downloads the three UCD files, verifies their SHA-256, and rebuilds `src/tables.zig`; the result is committed.
 
 The generator is `tools/gen.zig`. It reads `UnicodeData.txt`, `DerivedCoreProperties.txt`, and `PropList.txt`, and writes the ranges, the categories, and the mappings in one file. `just test` runs the generator's own tests with the module's.
 
