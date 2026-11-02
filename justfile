@@ -10,17 +10,15 @@ default:
 test:
     zig build test --summary all
 
-[doc("Regenerate src/tables.zig from the Unicode 18.0.0 files. Downloads and verifies the three UCD files, then runs the generator; commit the result")]
+[doc("Fetch the UCD conformance files and run the tests against them")]
+[group("test")]
+conformance:
+    zig build test -Dconformance --summary all
+
+[doc("Fetch the pinned UCD and regenerate src/tables.zig. Commit the result")]
 [group("data")]
 regen:
-    mkdir -p .zig-cache/ucd
-    curl -fsSL -o .zig-cache/ucd/UnicodeData.txt https://www.unicode.org/Public/18.0.0/ucd/UnicodeData.txt
-    curl -fsSL -o .zig-cache/ucd/DerivedCoreProperties.txt https://www.unicode.org/Public/18.0.0/ucd/DerivedCoreProperties.txt
-    curl -fsSL -o .zig-cache/ucd/PropList.txt https://www.unicode.org/Public/18.0.0/ucd/PropList.txt
-    echo "0736451de439ae7baf1425136617da495e09ee5afbe6e394374db7009ea08950  .zig-cache/ucd/UnicodeData.txt" | sha256sum -c -
-    echo "09c928886a178fcafd93c29e4bd59073a058e5a100b716d425cb563ab50f68c9  .zig-cache/ucd/DerivedCoreProperties.txt" | sha256sum -c -
-    echo "f438f532e8737bb8a2702126cdf9c4af5e357c58c7acf9d9eb2fc7c1a1d955d6  .zig-cache/ucd/PropList.txt" | sha256sum -c -
-    zig run tools/gen.zig -- --out src/tables.zig .zig-cache/ucd/UnicodeData.txt .zig-cache/ucd/DerivedCoreProperties.txt .zig-cache/ucd/PropList.txt
+    zig build regen -Dregen
 
 [doc("Lint Zig, Nix, Markdown, the workflows, and this justfile: ziglint, zig fmt, nix fmt, oxfmt, actionlint, zizmor, and just --fmt")]
 [group("lint")]
@@ -41,6 +39,6 @@ fmt:
     oxfmt README.md AGENTS.md CHANGELOG.md THIRD_PARTY.md .github .oxfmtrc.jsonc
     just --fmt
 
-[doc("Everything CI runs: the tests and lint")]
+[doc("Everything CI runs: the tests, lint, and conformance")]
 [group("ci")]
-ci: test lint
+ci: test lint conformance

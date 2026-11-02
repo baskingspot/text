@@ -8,10 +8,9 @@
 //! White_Space property. The `toUpper`, `toLower`, and `toTitle` functions are
 //! the simple one-to-one mappings.
 //!
-//! Every table comes from `UnicodeData.txt`, `DerivedCoreProperties.txt`, and
-//! `PropList.txt` at the release `version` names. `zig build regen` rebuilds
-//! `tables.zig` from the UCD release pinned in `build.zig.zon`; nothing in the
-//! table is edited by hand.
+//! Every table comes from the Unicode Character Database at the release
+//! `version` names. `just regen` rebuilds `tables.zig` from the UCD release
+//! pinned in `build.zig.zon`; nothing in the table is edited by hand.
 
 const std = @import("std");
 const tables = @import("tables.zig");
@@ -21,6 +20,12 @@ pub const version = tables.version;
 
 /// A Unicode general category, `Lu` through `Cn`.
 pub const Category = tables.Category;
+
+/// A Unicode script, from `Scripts.txt`.
+pub const Script = tables.Script;
+
+/// A Unicode block, from `Blocks.txt`.
+pub const Block = tables.Block;
 
 /// The highest code point, U+10FFFF.
 pub const max_code_point: u21 = 0x10FFFF;
@@ -126,6 +131,40 @@ pub fn isAssigned(cp: u21) bool {
     return category(cp) != .Cn;
 }
 
+/// The script of `cp`, from the Script property. Unassigned code points are
+/// `.Unknown`.
+pub fn script(cp: u21) Script {
+    return tagged(Script, &tables.script_ranges, cp, .Unknown);
+}
+
+/// The block of `cp`, from the Block property. Code points between blocks are
+/// `.No_Block`.
+pub fn block(cp: u21) Block {
+    return tagged(Block, &tables.block_ranges, cp, .No_Block);
+}
+
+/// The range `block` covers, or null when the block has no entries.
+pub fn blockRange(block_value: Block) ?tables.Range {
+    for (tables.block_ranges) |range| {
+        if (range.value == block_value) {
+            return .{ .start = range.start, .end = range.end };
+        }
+    }
+    return null;
+}
+
+/// The Cased property. Cased letters are those whose case mapping can change,
+/// used by the Final_Sigma rule.
+pub fn isCased(cp: u21) bool {
+    return inRanges(&tables.cased, cp);
+}
+
+/// The Case_Ignorable property: case mapping skips these when it looks for a
+/// neighboring cased letter.
+pub fn isCaseIgnorable(cp: u21) bool {
+    return inRanges(&tables.case_ignorable, cp);
+}
+
 /// The White_Space property from `PropList.txt`. It covers ASCII space and
 /// tab, the line breaks, the no-break spaces, and the Unicode spaces, and it
 /// excludes U+200B.
@@ -155,8 +194,7 @@ pub fn isXidContinue(cp: u21) bool {
 }
 
 /// The simple uppercase mapping from `UnicodeData.txt`, or `cp` when there is
-/// none. A full mapping, such as `ß` to `SS`, needs `SpecialCasing.txt` and is
-/// not here.
+/// none. `toUpperFull` is the mapping that can expand.
 pub fn toUpper(cp: u21) u21 {
     return mapped(&tables.upper, cp);
 }
@@ -169,6 +207,159 @@ pub fn toLower(cp: u21) u21 {
 /// The simple titlecase mapping, or `cp` when there is none.
 pub fn toTitle(cp: u21) u21 {
     return mapped(&tables.title, cp);
+}
+
+/// The full uppercase mapping, which can expand to three code points. The
+/// result points into `buf`.
+pub fn toUpperFull(cp: u21, buf: *[3]u21) []const u21 {
+    return fullMapping(&tables.full_upper, &tables.upper, cp, buf);
+}
+
+/// The full lowercase mapping, which can expand to three code points. The
+/// result points into `buf`. The Final_Sigma rule depends on context; `lower`
+/// applies it.
+pub fn toLowerFull(cp: u21, buf: *[3]u21) []const u21 {
+    return fullMapping(&tables.full_lower, &tables.lower, cp, buf);
+}
+
+/// The full titlecase mapping, which can expand to three code points. The
+/// result points into `buf`.
+pub fn toTitleFull(cp: u21, buf: *[3]u21) []const u21 {
+    return fullMapping(&tables.full_title, &tables.title, cp, buf);
+}
+
+/// The full uppercase mapping of a string. The caller frees the result.
+pub fn upper(allocator: std.mem.Allocator, input: []const u21) ![]u21 {
+    var out: std.ArrayList(u21) = .empty;
+    for (input) |cp| {
+        var buf: [3]u21 = undefined;
+        try out.appendSlice(allocator, toUpperFull(cp, &buf));
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// The full lowercase mapping of a string, including the Final_Sigma rule.
+/// The caller frees the result.
+pub fn lower(allocator: std.mem.Allocator, input: []const u21) ![]u21 {
+    var out: std.ArrayList(u21) = .empty;
+    for (input, 0..) |cp, index| {
+        if (findMulti(&tables.final_sigma, cp)) |mapping| {
+            if (isFinalSigma(input, index)) {
+                try out.appendSlice(allocator, mapping.to[0..mapping.len]);
+                continue;
+            }
+        }
+        var buf: [3]u21 = undefined;
+        try out.appendSlice(allocator, toLowerFull(cp, &buf));
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// The full titlecase mapping applied to each code point. Word-aware title
+/// casing belongs to the caller; this does not segment words.
+pub fn title(allocator: std.mem.Allocator, input: []const u21) ![]u21 {
+    var out: std.ArrayList(u21) = .empty;
+    for (input) |cp| {
+        var buf: [3]u21 = undefined;
+        try out.appendSlice(allocator, toTitleFull(cp, &buf));
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// The full case folding of one code point, which can expand to three. The
+/// result points into `buf`.
+pub fn foldFull(cp: u21, buf: *[3]u21) []const u21 {
+    if (findMulti(&tables.fold_full, cp)) |mapping| {
+        @memcpy(buf[0..mapping.len], mapping.to[0..mapping.len]);
+        return buf[0..mapping.len];
+    }
+    buf[0] = mapped(&tables.fold_simple, cp);
+    return buf[0..1];
+}
+
+/// The simple case folding of one code point, or `cp` when there is none.
+/// Simple folding does not expand; `ß > ss` needs `foldFull`.
+pub fn foldSimple(cp: u21) u21 {
+    return mapped(&tables.fold_simple, cp);
+}
+
+/// The full case folding of a string. The caller frees the result.
+pub fn fold(allocator: std.mem.Allocator, input: []const u21) ![]u21 {
+    var out: std.ArrayList(u21) = .empty;
+    for (input) |cp| {
+        var buf: [3]u21 = undefined;
+        try out.appendSlice(allocator, foldFull(cp, &buf));
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn fullMapping(
+    special: []const tables.MultiMapping,
+    simple: []const tables.Mapping,
+    cp: u21,
+    buf: *[3]u21,
+) []const u21 {
+    if (findMulti(special, cp)) |mapping| {
+        @memcpy(buf[0..mapping.len], mapping.to[0..mapping.len]);
+        return buf[0..mapping.len];
+    }
+    buf[0] = mapped(simple, cp);
+    return buf[0..1];
+}
+
+fn findMulti(mappings: []const tables.MultiMapping, cp: u21) ?tables.MultiMapping {
+    var low: usize = 0;
+    var high: usize = mappings.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const mapping = mappings[mid];
+        if (cp < mapping.from) {
+            high = mid;
+        } else if (cp > mapping.from) {
+            low = mid + 1;
+        } else {
+            return mapping;
+        }
+    }
+    return null;
+}
+
+fn isFinalSigma(input: []const u21, index: usize) bool {
+    var before = index;
+    var preceded = false;
+    while (before > 0) {
+        before -= 1;
+        const cp = input[before];
+        if (isCaseIgnorable(cp)) continue;
+        preceded = isCased(cp);
+        break;
+    }
+    if (!preceded) return false;
+
+    var after = index + 1;
+    while (after < input.len) : (after += 1) {
+        const cp = input[after];
+        if (isCaseIgnorable(cp)) continue;
+        return !isCased(cp);
+    }
+    return true;
+}
+
+fn tagged(comptime T: type, ranges: []const tables.TaggedRange(T), cp: u21, default: T) T {
+    var low: usize = 0;
+    var high: usize = ranges.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const range = ranges[mid];
+        if (cp < range.start) {
+            high = mid;
+        } else if (cp > range.end) {
+            low = mid + 1;
+        } else {
+            return range.value;
+        }
+    }
+    return default;
 }
 
 fn inRanges(ranges: []const tables.Range, cp: u21) bool {
@@ -319,6 +510,168 @@ fn expectSortedRanges(ranges: []const tables.Range) !void {
 fn expectSortedMappings(mappings: []const tables.Mapping) !void {
     var previous: u32 = 0;
     for (mappings, 0..) |mapping, index| {
+        if (index > 0) try testing.expect(previous < mapping.from);
+        previous = mapping.from;
+    }
+}
+
+test "scripts" {
+    try testing.expectEqual(Script.Latin, script('A'));
+    try testing.expectEqual(Script.Greek, script(0x03B1));
+    try testing.expectEqual(Script.Han, script(0x4E00));
+    try testing.expectEqual(Script.Common, script('0'));
+    try testing.expectEqual(Script.Inherited, script(0x0300));
+    try testing.expectEqual(Script.Unknown, script(0x10FFFF));
+}
+
+test "blocks" {
+    try testing.expectEqual(Block.Basic_Latin, block('A'));
+    try testing.expectEqual(Block.Combining_Diacritical_Marks, block(0x0300));
+    try testing.expectEqual(Block.CJK_Unified_Ideographs, block(0x4E00));
+    try testing.expectEqual(Block.No_Block, block(0x2FE0));
+    try testing.expectEqual(Block.Supplementary_Private_Use_Area_B, block(0x10FFFF));
+
+    const latin = blockRange(.Basic_Latin) orelse return error.NoBlock;
+    try testing.expectEqual(@as(u21, 0x0000), latin.start);
+    try testing.expectEqual(@as(u21, 0x007F), latin.end);
+}
+
+test "full case mappings" {
+    var buf: [3]u21 = undefined;
+    try testing.expectEqualSlices(u21, &.{ 'S', 'S' }, toUpperFull(0x00DF, &buf));
+    try testing.expectEqualSlices(u21, &.{'A'}, toUpperFull('a', &buf));
+    try testing.expectEqualSlices(u21, &.{ 0x0069, 0x0307 }, toLowerFull(0x0130, &buf));
+    try testing.expectEqualSlices(u21, &.{0x01C5}, toTitleFull(0x01C6, &buf));
+}
+
+test "string casing and the final sigma" {
+    const allocator = testing.allocator;
+
+    const upper_str = try upper(allocator, &.{ 's', 't', 'r', 'a', 0x00DF, 'e' });
+    defer allocator.free(upper_str);
+    try testing.expectEqualSlices(u21, &.{ 'S', 'T', 'R', 'A', 'S', 'S', 'E' }, upper_str);
+
+    const final = try lower(allocator, &.{ 0x0391, 0x03A3 });
+    defer allocator.free(final);
+    try testing.expectEqualSlices(u21, &.{ 0x03B1, 0x03C2 }, final);
+
+    // A lone sigma has no preceding cased letter, so it is not final.
+    const lone = try lower(allocator, &.{0x03A3});
+    defer allocator.free(lone);
+    try testing.expectEqualSlices(u21, &.{0x03C3}, lone);
+
+    // A following cased letter also keeps the ordinary sigma.
+    const medial = try lower(allocator, &.{ 0x0391, 0x03A3, 0x0391 });
+    defer allocator.free(medial);
+    try testing.expectEqualSlices(u21, &.{ 0x03B1, 0x03C3, 0x03B1 }, medial);
+
+    const titled = try title(allocator, &.{ 0x01C6, 'a' });
+    defer allocator.free(titled);
+    try testing.expectEqualSlices(u21, &.{ 0x01C5, 'A' }, titled);
+}
+
+test "case folding" {
+    var buf: [3]u21 = undefined;
+    try testing.expectEqualSlices(u21, &.{ 's', 's' }, foldFull(0x00DF, &buf));
+    try testing.expectEqualSlices(u21, &.{ 's', 's' }, foldFull(0x1E9E, &buf));
+    try testing.expectEqualSlices(u21, &.{'a'}, foldFull('A', &buf));
+    try testing.expectEqual(@as(u21, 0x00DF), foldSimple(0x00DF));
+    try testing.expectEqual(@as(u21, 'a'), foldSimple('A'));
+
+    const allocator = testing.allocator;
+    const folded = try fold(allocator, &.{ 'S', 't', 'r', 'a', 0x00DF, 'e' });
+    defer allocator.free(folded);
+    try testing.expectEqualSlices(u21, &.{ 's', 't', 'r', 'a', 's', 's', 'e' }, folded);
+}
+
+test "every generated table is sorted" {
+    try expectSortedTagged(Script, &tables.script_ranges);
+    try expectSortedTagged(Block, &tables.block_ranges);
+    try expectSortedTagged(tables.GraphemeBreak, &tables.grapheme_ranges);
+    try expectSortedTagged(tables.WordBreak, &tables.word_ranges);
+    try expectSortedTagged(tables.SentenceBreak, &tables.sentence_ranges);
+    try expectSortedTagged(tables.InCb, &tables.incb_ranges);
+    try expectSortedTagged(tables.BidiClass, &tables.bidi_ranges);
+    try expectSortedTagged(tables.BidiClass, &tables.bidi_defaults);
+    try expectSortedRanges(&tables.extended_pictographic);
+    try expectSortedCcc(&tables.ccc);
+    try expectSortedDecompositions(&tables.decompositions);
+    try expectSortedCompositions(&tables.compositions);
+    try expectSortedBrackets(&tables.brackets);
+    try expectSortedMirrors(&tables.mirrors);
+}
+
+fn expectSortedTagged(comptime T: type, ranges: []const tables.TaggedRange(T)) !void {
+    var previous: u32 = 0;
+    for (ranges, 0..) |range, index| {
+        try testing.expect(range.start <= range.end);
+        try testing.expect(@backingInt(range.value) < @typeInfo(T).@"enum".field_names.len);
+        if (index > 0) try testing.expect(previous <= range.start);
+        previous = range.start;
+    }
+}
+
+fn expectSortedCcc(ranges: []const tables.CccRange) !void {
+    var previous: u32 = 0;
+    for (ranges, 0..) |range, index| {
+        try testing.expect(range.start <= range.end);
+        try testing.expect(range.ccc != 0);
+        if (index > 0) try testing.expect(previous < range.start);
+        previous = range.end;
+    }
+}
+
+fn expectSortedDecompositions(entries: []const tables.Decomposition) !void {
+    var previous: u32 = 0;
+    for (entries, 0..) |entry, index| {
+        try testing.expect(entry.len != 0);
+        try testing.expect(@as(usize, entry.offset) + entry.len <= tables.decomposition_values.len);
+        if (index > 0) try testing.expect(previous < entry.from);
+        previous = entry.from;
+    }
+}
+
+fn expectSortedCompositions(entries: []const tables.Composition) !void {
+    for (entries, 0..) |entry, index| {
+        if (index > 0) {
+            const previous = entries[index - 1];
+            const ordered = previous.first < entry.first or
+                (previous.first == entry.first and previous.second < entry.second);
+            try testing.expect(ordered);
+        }
+    }
+}
+
+fn expectSortedBrackets(entries: []const tables.Bracket) !void {
+    var previous: u32 = 0;
+    for (entries, 0..) |entry, index| {
+        if (index > 0) try testing.expect(previous < entry.cp);
+        previous = entry.cp;
+    }
+}
+
+fn expectSortedMirrors(entries: []const tables.Mirror) !void {
+    var previous: u32 = 0;
+    for (entries, 0..) |entry, index| {
+        if (index > 0) try testing.expect(previous < entry.from);
+        previous = entry.from;
+    }
+}
+
+test "generated case tables are sorted" {
+    try expectSortedMappings(&tables.fold_simple);
+    try expectSortedMulti(&tables.full_upper);
+    try expectSortedMulti(&tables.full_lower);
+    try expectSortedMulti(&tables.full_title);
+    try expectSortedMulti(&tables.final_sigma);
+    try expectSortedMulti(&tables.fold_full);
+}
+
+fn expectSortedMulti(mappings: []const tables.MultiMapping) !void {
+    var previous: u32 = 0;
+    for (mappings, 0..) |mapping, index| {
+        try testing.expect(mapping.len != 0);
+        try testing.expect(mapping.len <= 3);
         if (index > 0) try testing.expect(previous < mapping.from);
         previous = mapping.from;
     }

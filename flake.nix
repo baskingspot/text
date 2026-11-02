@@ -28,7 +28,7 @@
             ];
 
             # Project-specific tools.
-            packages = with pkgs; [ curl ];
+            packages = with pkgs; [ ];
           };
         };
     };

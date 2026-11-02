@@ -6,6 +6,9 @@
         "build.zig",
         "src/root.zig",
         "src/unicode.zig",
+        "src/normalize.zig",
+        "src/segment.zig",
+        "src/bidi.zig",
         "tools/gen.zig",
     },
     .rules = .{

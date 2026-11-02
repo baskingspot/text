@@ -6,6 +6,13 @@
     .dependencies = .{
         // The test runner. Lazy: only the root build uses it, and build.zig
         // returns early for a consumer.
+        // The Unicode Character Database, 18.0.0. Only `zig build regen
+        // -Dregen` uses it; a consumer never fetches it.
+        .ucd = .{
+            .url = "https://www.unicode.org/Public/18.0.0/ucd/UCD.zip",
+            .hash = "N-V-__8AANHxWwIt4EQAd6ed2GJB3LAy6HBNZO-fmag0ZqR4",
+            .lazy = true,
+        },
         .testingx = .{
             .url = "https://baskingspot.dev/testingx/v0.4.0.tar.gz",
             .hash = "testingx-0.4.0-ib95-2JkAwDVM639ma-akYafT4bdewLfpFaAEnLBzQXG",
