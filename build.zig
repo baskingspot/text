@@ -34,13 +34,13 @@ pub fn build(b: *std.Build) void {
 
     // testingx provides the test runner. It is lazy because only the root
     // build uses it.
-    const testingx = b.lazyDependency("testingx", .{ .target = target }) orelse return;
+    const testingx = (b.dependencyLazy("testingx", .{ .target = target }) catch null) orelse return;
 
     // The UCD is a lazy dependency. `regen` and `conformance` fetch it; a
     // normal build and a consumer never do.
     const needs_ucd = want_regen or (want_conformance and conformance_dir.len == 0);
     const ucd: ?*std.Build.Dependency = if (needs_ucd)
-        b.lazyDependency("ucd", .{}) orelse return
+        (b.dependencyLazy("ucd", .{}) catch null) orelse return
     else
         null;
 
@@ -85,7 +85,7 @@ pub fn build(b: *std.Build) void {
     // Benchmarks. testingx's addBench builds the suite as ReleaseFast. The
     // dependency is lazy, so a consumer never fetches it.
     if (b.lazyImport(@This(), "testingx")) |testingx_build| {
-        const bench_dep = b.lazyDependency("testingx", .{ .target = target }).?;
+        const bench_dep = (b.dependencyLazy("testingx", .{ .target = target }) catch null).?;
         const run_bench = testingx_build.addBench(b, .{
             .name = "bench-text",
             .module = bench_dep.module("testingx"),
